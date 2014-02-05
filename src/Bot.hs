@@ -13,13 +13,13 @@ import Control.Monad.Reader (Reader,asks,runReader)
 import Data.Bool (Bool(True,False),(&&))
 import Data.Eq ((==))
 import Data.Functor (fmap)
-import Data.Function ((.),($),id,flip)
+import Data.Function ((.),($),id,flip,const)
 import Data.Graph.Inductive.Graph
 import Data.Graph.Inductive.Tree
 import Data.Graph.Inductive.Query
 import Data.Maybe (Maybe(Just,Nothing),fromJust,isNothing)
 import Data.Ord ((>=),(<))
-import Data.List((!!),length,replicate,map,filter,concatMap,zip,drop)
+import Data.List((!!),length,replicate,map,filter,concatMap,zip,drop,find)
 import Data.Tuple (fst,snd)
 import Safe (headMay)
 import System.IO (IO)
@@ -27,12 +27,13 @@ import System.Random (getStdRandom, randomR)
 
 
 -- $setup
--- >>> let board = Board 4 [TavernTile,WoodTile,WoodTile,TavernTile,FreeTile,WoodTile,FreeTile,FreeTile,FreeTile,WoodTile,FreeTile,(MineTile Nothing),FreeTile,FreeTile,FreeTile,MineTile (Just (HeroId 1))]
+-- >>> let board = Board 4 [TavernTile,WoodTile,WoodTile,TavernTile,FreeTile,WoodTile,FreeTile,HeroTile (HeroId 2),FreeTile,WoodTile,FreeTile,(MineTile Nothing),FreeTile,FreeTile,HeroTile (HeroId 1),MineTile (Just (HeroId 1))]
 -- >>> let hero1 = Hero (HeroId 1) "name" Nothing Nothing (Pos 2 2) 100 0 0 (Pos 3 3) False
 -- >>> let game  = Game (GameId "") 1 20 [hero1] board False
 -- >>> let state = State game hero1 "" "" ""
 
 type BotM = Reader State 
+type TileSelector = Tile -> Bool
 
 bot :: Bot
 bot = undefined
@@ -51,11 +52,22 @@ isMineTile _ _                      = False
 
 isMyMineTile :: BotM TileSelector
 isMyMineTile = do
-  id <- heroId <$> askHero
+  id <- heroId <$> askMyHero
   return $ isMineTile (== Just id)
 
+isHeroTile :: (HeroId -> Bool) -> TileSelector
+isHeroTile selectHid (HeroTile hid) = selectHid hid
+isHeroTile _ _  = False
+
+isOpponentTile :: (Hero -> Bool) -> BotM TileSelector
+isOpponentTile heroSelect = asks rdr
+  where
+    rdr s = isHeroTile (heroSelect . fromJust . hero s)
+    hero s hid = runReader (askHero hid) s
+    
 isUnownedMineTile :: TileSelector
 isUnownedMineTile = isMineTile isNothing
+
 -- |
 -- >>> inBoard board (Pos 0 0)
 -- True
@@ -83,7 +95,7 @@ tileAt b p@(Pos x y) =
    where
      idx = y * boardSize b + x
 
-type TileSelector = Tile -> Bool
+
 
 -- |
 -- >>> runReader (closest isTavernTile (Pos 2 3)) state
@@ -96,6 +108,8 @@ type TileSelector = Tile -> Bool
 -- Just (Pos {posX = 3, posY = 3})
 -- >>> runReader (closest isUnownedMineTile (Pos 2 3)) state
 -- Just (Pos {posX = 3, posY = 2})
+-- >>> runReader (isOpponentTile (const True) >>= flip closest (Pos 2 3)) state
+-- Just (Pos {posX = 3, posY = 1}) 
 closest :: TileSelector -> Pos -> BotM (Maybe Pos)
 closest sel pos = do
   b <- askBoard
@@ -113,7 +127,7 @@ distanceBetween s = fmap length . shortestPath s
 askMoveGraph :: BotM (Gr Tile Int)
 askMoveGraph = do
   b    <- askBoard
-  me   <- askHero
+  me   <- askMyHero
   side <- askBoardSize
   let
     n = (side * side) - 1
@@ -154,8 +168,11 @@ askBoard = asks (gameBoard . stateGame)
 askBoardSize :: BotM Int
 askBoardSize = fmap boardSize askBoard
 
-askHero :: BotM Hero
-askHero = asks stateHero
+askMyHero :: BotM Hero
+askMyHero = asks stateHero
+
+askHero :: HeroId -> BotM (Maybe Hero)
+askHero hid = asks (find ((== hid) . heroId) . gameHeroes . stateGame)
 
 posToIndex :: Board -> Pos -> Node
 posToIndex b p@(Pos x y) = idx
