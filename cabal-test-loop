@@ -1,0 +1,15 @@
+#!/bin/sh 
+
+files="*.cabal src tests"
+exclude="(\.#.*|flymake).hs$"
+
+do_build() {
+  cabal build && (cabal test || cat dist/test/*-doctests.log) 
+}
+
+cabal configure --enable-tests --flag="testing" && do_build
+
+while $(inotifywait -qq -r --exclude $exclude -e modify -e create -e move $files) ; do
+  do_build
+done;  
+

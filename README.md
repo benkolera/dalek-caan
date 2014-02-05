@@ -1,4 +1,5 @@
 dalek-caan
 ==========
 
-Haskell bot for vindinium (http://vindinium.org/doc)
+Bad assed vindinium (http://vindinium.org/doc) robot hell bent on conquering
+the entire universe! ;)
