@@ -7,24 +7,27 @@ import Vindinium
 import Prelude(error,(*),(+),(-),undefined,Int,mod,div,(^))
 import Control.Applicative ((<$>))
 import Control.Arrow ((&&&))
-import Control.Monad (return,liftM,(>>=),sequence,mapM)
+import Control.Monad (return,liftM,(>>=),sequence,mapM,join)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (Reader,asks,runReader)
 import Data.Bool (Bool(True,False),(&&))
-import Data.Eq ((==))
+import Data.Eq (Eq,(==))
 import Data.Functor (fmap)
 import Data.Function ((.),($),id,flip,const)
 import Data.Graph.Inductive.Graph
 import Data.Graph.Inductive.Tree
 import Data.Graph.Inductive.Query
-import Data.Maybe (Maybe(Just,Nothing),fromJust,isNothing,maybe)
-import Data.Ord ((>=),(<),(<=))
 import Data.List((!!),length,replicate,map,filter,concat,zip,drop,find)
+import Data.Maybe (Maybe(Just,Nothing),fromJust,isNothing,maybe,isJust,fromMaybe)
+import Data.Ord (Ord,(>=),(<),(<=))
+import Data.PQueue.Max (MaxQueue,toDescList,fromList)
+
+import qualified Data.Text as T
 import Data.Tuple (fst,snd)
 import Safe (headMay)
 import System.IO (IO)
 import System.Random (getStdRandom, randomR)
-
+import Text.Show (Show,show)
 
 -- $setup
 -- >>> let board = Board 4 [TavernTile,WoodTile,WoodTile,TavernTile,FreeTile,WoodTile,FreeTile,HeroTile (HeroId 2),FreeTile,WoodTile,FreeTile,(MineTile Nothing),FreeTile,FreeTile,HeroTile (HeroId 1),MineTile (Just (HeroId 1))]
@@ -32,11 +35,62 @@ import System.Random (getStdRandom, randomR)
 -- >>> let game  = Game (GameId "") 1 20 [hero1] board False
 -- >>> let state = State game hero1 "" "" ""
 
+type Move = Dir
 type BotM = Reader State 
 type TileSelector = Tile -> Bool
 
+data Weighted a = Weighted Int a deriving (Show)
+instance (Eq a) => Eq (Weighted a) where
+  (Weighted wa a) == (Weighted wb b) = wa == wb && a == b
+instance (Eq a) => Ord (Weighted a) where
+  (Weighted a _) <= (Weighted b _) = a <= b
+
+data Tactic = Tactic T.Text (BotM (Maybe Move))
+instance Show Tactic where
+  show (Tactic t _) = T.unpack . T.concat $ ["Tactic(",t,")"]
+instance Eq Tactic where
+  (Tactic a _) == (Tactic b _) = a == b
+
+type TacticPQueue = MaxQueue (Weighted Tactic)
+
+data Strategy = Strategy T.Text (BotM TacticPQueue)
+instance Show Strategy where
+  show (Strategy t _) = T.unpack . T.concat $ ["Strategy(",t,")"]
+instance Eq Strategy where
+  (Strategy a _) == (Strategy b _) = a == b  
+
 bot :: Bot
-bot = undefined
+bot = return . runReader dummyBot
+
+strategicBot :: Strategy -> BotM Move
+strategicBot (Strategy _ m) = do
+  tactics <- toDescList <$> m
+  fmap firstMove . mapM (\ (Weighted _ (Tactic _ m)) -> m ) $ tactics
+  where
+    firstMove :: [Maybe Move] -> Move
+    firstMove = fromMaybe Stay . join . find isJust
+
+-- Are these names actually worth the hassle?
+runStrategy (Strategy _ m) = runReader m
+runTactic (Tactic _ m) = runReader m
+
+-- |
+-- >>> runStrategy dummyStrategy state
+-- fromDescList [Weighted 10 Tactic(stay)]
+dummyStrategy :: Strategy
+dummyStrategy = Strategy "dummy" . return $ fromList [Weighted 10 stayTactic]
+
+-- |
+-- >>> runTactic stayTactic state
+-- Just Stay
+stayTactic :: Tactic
+stayTactic = Tactic "stay" . return . Just $ Stay
+
+-- |
+-- >>> runReader dummyBot state
+-- Stay
+dummyBot :: BotM Move
+dummyBot = strategicBot dummyStrategy
 
 isPassibleTile :: TileSelector
 isPassibleTile WoodTile = False
