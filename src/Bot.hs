@@ -4,7 +4,7 @@ module Bot
 
 import Vindinium
 
-import Prelude(error,(*),(+),(-),undefined,Int,mod,div,(^))
+import Prelude((*),(+),(-),Int,mod,div,(^))
 import Control.Applicative ((<$>))
 import Control.Arrow ((&&&))
 import Control.Monad (return,liftM,(>>=),sequence,mapM,join)
@@ -14,9 +14,9 @@ import Data.Bool (Bool(True,False),(&&))
 import Data.Eq (Eq,(==))
 import Data.Functor (fmap)
 import Data.Function ((.),($),id,flip,const)
-import Data.Graph.Inductive.Graph
-import Data.Graph.Inductive.Tree
-import Data.Graph.Inductive.Query
+import Data.Graph.Inductive.Graph (mkGraph,Node,Path,LEdge)
+import Data.Graph.Inductive.Tree (Gr)
+import Data.Graph.Inductive.Query (sp)
 import Data.List((!!),length,replicate,map,filter,concat,zip,drop,find)
 import Data.Maybe (Maybe(Just,Nothing),fromJust,isNothing,maybe,isJust,fromMaybe)
 import Data.Ord (Ord,(>=),(<),(<=))
