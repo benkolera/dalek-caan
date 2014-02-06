@@ -4,10 +4,10 @@ module Bot
 
 import Vindinium
 
-import Prelude(error,(*),(+),(-),undefined,Int,mod,div)
+import Prelude(error,(*),(+),(-),undefined,Int,mod,div,(^))
 import Control.Applicative ((<$>))
 import Control.Arrow ((&&&))
-import Control.Monad (return,liftM,(>>=))
+import Control.Monad (return,liftM,(>>=),sequence,mapM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (Reader,asks,runReader)
 import Data.Bool (Bool(True,False),(&&))
@@ -17,9 +17,9 @@ import Data.Function ((.),($),id,flip,const)
 import Data.Graph.Inductive.Graph
 import Data.Graph.Inductive.Tree
 import Data.Graph.Inductive.Query
-import Data.Maybe (Maybe(Just,Nothing),fromJust,isNothing)
-import Data.Ord ((>=),(<))
-import Data.List((!!),length,replicate,map,filter,concatMap,zip,drop,find)
+import Data.Maybe (Maybe(Just,Nothing),fromJust,isNothing,maybe)
+import Data.Ord ((>=),(<),(<=))
+import Data.List((!!),length,replicate,map,filter,concat,zip,drop,find)
 import Data.Tuple (fst,snd)
 import Safe (headMay)
 import System.IO (IO)
@@ -95,8 +95,84 @@ tileAt b p@(Pos x y) =
    where
      idx = y * boardSize b + x
 
+-- |
+-- >>> runReader (neighbours 14) state
+-- [Pos {posX = 1, posY = 3},Pos {posX = 3, posY = 3},Pos {posX = 2, posY = 2},Pos {posX = 2, posY = 4}]
+neighbours :: Int -> BotM [Pos]
+neighbours i = do
+  b <- askBoard
+  return $ sequence [posWest,posEast,posNorth,posSouth] $ indexToPos b i
 
+-- |
+-- >>> runReader (validNeighbours 14) state
+-- [Pos {posX = 1, posY = 3},Pos {posX = 3, posY = 3},Pos {posX = 2, posY = 2}]
+validNeighbours :: Int -> BotM [Pos]
+validNeighbours i = do
+  hid   <- heroId <$> askMyHero
+  b     <- askBoard
+  nbs   <- neighbours i
+  return $ case tileAt b (indexToPos b i) of
+    Just FreeTile     -> filter (inBoard b) nbs
+    Just (HeroTile h) | h == hid -> filter (inBoard b) nbs
+    _ -> []
 
+-- |
+-- >>> runReader (walkableNeighbours 14) state
+-- [(14,13,1),(14,15,1),(14,10,1)]
+walkableNeighbours :: Int -> BotM [LEdge Int]
+walkableNeighbours i = do
+  b       <- askBoard
+  validNs <- validNeighbours i
+  return $ map (\p -> (i,posToIndex b p,1)) validNs
+
+walkableEdges :: BotM [LEdge Int]
+walkableEdges = do
+  board    <- askBoard
+  hid      <- heroId <$> askMyHero  
+  idxs     <- askAllIndices
+  fmap concat . mapM walkableNeighbours $ idxs
+
+{-
+>>> runReader askMoveGraph state
+{:
+0:TavernTile->[]
+1:WoodTile->[]
+2:WoodTile->[]
+3:TavernTile->[]
+4:FreeTile->[(1,8),(1,0),(1,5)]
+5:WoodTile->[]
+6:FreeTile->[(1,10),(1,2),(1,7),(1,5)]
+7:HeroTile (HeroId 2)->[]
+8:FreeTile->[(1,12),(1,4),(1,9)]
+9:WoodTile->[]
+10:FreeTile->[(1,14),(1,6),(1,11),(1,9)]
+11:MineTile Nothing->[]
+12:FreeTile->[(1,13),(1,8)]
+13:FreeTile->[(1,14),(1,9),(1,12)]
+14:HeroTile (HeroId 1)->[(1,10),(1,15),(1,13)]
+15:MineTile (Just (HeroId 1))->[]
+:} -}
+askMoveGraph :: BotM (Gr Tile Int)
+askMoveGraph = do
+  b      <- askBoard
+  side   <- askBoardSize
+  ledges <- walkableEdges
+  let
+    lnodes = map (id &&& (boardTiles b !!)) [0,1..((side * side) - 1)]
+  return $ mkGraph lnodes ledges
+
+-- |
+-- >>> runReader (shortestPath (Pos 2 3) (Pos 0 0)) state
+-- [13,12,8,4,0]
+shortestPath :: Pos -> Pos -> BotM Path
+shortestPath start dest = do
+  b <- askBoard
+  g <- askMoveGraph
+  let
+    startIdx = posToIndex b start
+    destIdx  = posToIndex b dest
+  return $ drop 1 . sp startIdx destIdx $ g
+  
 -- |
 -- >>> runReader (closest isTavernTile (Pos 2 3)) state
 -- Just (Pos {posX = 0, posY = 0})
@@ -118,55 +194,48 @@ closest sel pos = do
   
 -- |
 -- >>> runReader (distanceBetween (Pos 2 3) (Pos 1 3)) state
--- 1
+-- Just 1
 -- >>> runReader (distanceBetween (Pos 2 3) (Pos 0 0)) state
--- 5
-distanceBetween:: Pos -> Pos -> BotM Int
-distanceBetween s = fmap length . shortestPath s
+-- Just 5
+-- >>> runReader (distanceBetween (Pos 2 3) (Pos 3 0)) state
+-- Nothing
+distanceBetween:: Pos -> Pos -> BotM (Maybe Int)
+distanceBetween s = fmap distance . shortestPath s
+  where
+    distance p = Just (length p) >>= (\d -> if d <= 0 then Nothing else Just d)
 
-askMoveGraph :: BotM (Gr Tile Int)
-askMoveGraph = do
-  b    <- askBoard
-  me   <- askMyHero
-  side <- askBoardSize
-  let
-    n = (side * side) - 1
-    lnodes = map (id &&& (boardTiles b !!)) [0,1..n]
-    ledges = walkableEdges b (heroId me)
-
-  return $ mkGraph lnodes ledges
-         
-walkableEdges :: Board -> HeroId -> [LEdge Int]
-walkableEdges b hid = concatMap walkableNeighbours [0,1..n]
-  where walkableNeighbours i = map (\t@(p,d) -> (i, posToIndex b p, d)) (validNeighBours i)
-        validNeighBours i =
-          case tileAt b (indexToPos b i) of
-            Just FreeTile     -> filter (\ln@(i,_) -> (inBoard b i)) $ neighBours i
-            Just (HeroTile h) | h == hid -> filter (\ln@(i,_) -> (inBoard b i)) $ neighBours i
-            _ -> []
-        side = boardSize b
-        n = (side * side) - 1
-        neighBours i = [--Positions of neighbours and travel distance of 1
-                        (Pos ((i `mod` side) - 1) (i `div` side), 1), --West
-                        (Pos ((i `mod` side) + 1) (i `div` side), 1), --East
-                        (Pos (i `mod` side) ((i `div` side) - 1), 1), --North
-                        (Pos (i `mod` side) ((i `div` side) + 1), 1)] --South
-
-shortestPath :: Pos -> Pos -> BotM Path
-shortestPath start dest = do
-  b <- askBoard
-  g <- askMoveGraph
-  let
-    startIdx = posToIndex b start
-    destIdx  = posToIndex b dest
-  return $ drop 1 . sp startIdx destIdx $ g
-  
+-- |
+-- >>> runReader (tilesWithinRadius isTavernTile 1 (Pos 2 3)) state
+-- []
+-- >>> runReader (tilesWithinRadius isTavernTile 5 (Pos 2 3)) state
+-- [Pos {posX = 0, posY = 0}]
+tilesWithinRadius :: TileSelector -> Int -> Pos -> BotM [Pos]
+tilesWithinRadius sel rad startP = do
+  coordBoard  <- askCoordBoard
+  tileSel'    <- selectTile
+  return . map fst . filter tileSel' $ coordBoard
+  where
+    selectTile = asks (\s (p,t) -> sel t && maybe False (<= rad) (runDistanceBetween p s))
+    runDistanceBetween p = runReader (distanceBetween startP p)  
+    
 
 askBoard :: BotM Board
 askBoard = asks (gameBoard . stateGame)
 
+askCoordBoard :: BotM [(Pos,Tile)]
+askCoordBoard = do
+  board  <- askBoard
+  allPos <- map (indexToPos board) <$> askAllIndices
+  return $ zip allPos (boardTiles board)
+
 askBoardSize :: BotM Int
 askBoardSize = fmap boardSize askBoard
+
+askAllIndices :: BotM [Int]
+askAllIndices = fmap (\x -> [0..x^2] ) askBoardSize
+
+allIndices :: Int -> [Int]
+allIndices boardSize = [0..( boardSize^2 - 1)]
 
 askMyHero :: BotM Hero
 askMyHero = asks stateHero
@@ -181,3 +250,15 @@ posToIndex b p@(Pos x y) = idx
 indexToPos :: Board -> Node -> Pos
 indexToPos b n = Pos (n `mod` side) (n `div` side)
   where side = boardSize b
+
+indexNorth,indexSouth,indexEast,indexWest :: Board -> Node -> Node
+indexNorth b = posToIndex b . posNorth . indexToPos b
+indexSouth b = posToIndex b . posSouth . indexToPos b
+indexEast  b = posToIndex b . posEast  . indexToPos b
+indexWest  b = posToIndex b . posWest  . indexToPos b
+
+posNorth,posSouth,posEast,posWest :: Pos -> Pos
+posWest (Pos x y) = Pos (x - 1) y
+posEast (Pos x y) = Pos (x + 1) y
+posSouth  (Pos x y) = Pos x       (y + 1)
+posNorth  (Pos x y) = Pos x       (y - 1)
